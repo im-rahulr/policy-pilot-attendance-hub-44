@@ -5,7 +5,8 @@ import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, 
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Trash2, AlertTriangle, Database, RotateCcw } from "lucide-react";
-import { supabase } from "@/lib/supabase";
+import { db } from "@/lib/firebase";
+import { collection, getDocs, deleteDoc, doc } from "firebase/firestore";
 import { useToast } from "@/hooks/use-toast";
 
 const DataManagement = () => {
@@ -26,22 +27,23 @@ const DataManagement = () => {
     setIsResetting(true);
     
     try {
-      // Delete content data from tables in correct order (preserving user accounts)
-      const contentTables = [
+      // Delete content data from collections in Firebase (preserving user accounts)
+      const contentCollections = [
         'attendance_records',
         'classes', 
         'subjects'
-        // Note: NOT deleting 'user_profiles' to preserve user accounts
+        // Note: NOT deleting 'users' to preserve user accounts
       ];
 
-      for (const table of contentTables) {
-        const { error } = await supabase
-          .from(table)
-          .delete()
-          .neq('id', '00000000-0000-0000-0000-000000000000'); // Delete all records
-        
-        if (error) {
-          console.error(`Error deleting from ${table}:`, error);
+      for (const collectionName of contentCollections) {
+        try {
+          const snapshot = await getDocs(collection(db, collectionName));
+          const deletePromises = snapshot.docs.map(docSnapshot => 
+            deleteDoc(doc(db, collectionName, docSnapshot.id))
+          );
+          await Promise.all(deletePromises);
+        } catch (error) {
+          console.error(`Error deleting from ${collectionName}:`, error);
         }
       }
 

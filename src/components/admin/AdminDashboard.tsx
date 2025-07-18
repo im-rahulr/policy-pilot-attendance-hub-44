@@ -4,7 +4,8 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Users, UserCheck, TrendingUp, AlertCircle, Calendar, BookOpen } from "lucide-react";
-import { supabase } from "@/lib/supabase";
+import { db } from "@/lib/firebase";
+import { collection, getDocs, query, orderBy, limit } from "firebase/firestore";
 
 const AdminDashboard = () => {
   const [stats, setStats] = useState({
@@ -34,80 +35,56 @@ const AdminDashboard = () => {
       let attendanceRate = 0
       let activeToday = 0
 
-      // Try to fetch users (handle RLS issues)
+      // Try to fetch users from Firebase
       try {
-        const { data: usersData, error: usersError } = await supabase.from('users').select('*')
-        
-        if (usersError && usersError.code === '42P17') {
-          // RLS infinite recursion - use auth users instead
-          console.warn('Using auth user fallback due to RLS issue')
-          const { data: { user: authUser } } = await supabase.auth.getUser()
-          totalUsers = authUser ? 1 : 0
-        } else if (usersError) {
-          console.warn('Users query failed:', usersError)
-          totalUsers = 1 // At least current user
-        } else {
-          totalUsers = usersData?.length || 1
-        }
+        const usersSnapshot = await getDocs(collection(db, 'users'))
+        totalUsers = usersSnapshot.size || 1
       } catch (err) {
-        console.warn('Users table access failed:', err)
+        console.warn('Users collection access failed:', err)
         totalUsers = 1
       }
 
-      // Try to fetch subjects (handle RLS issues)  
+      // Try to fetch subjects from Firebase
       try {
-        const { data: subjectsData, error: subjectsError } = await supabase.from('subjects').select('*')
-        if (!subjectsError && subjectsData) {
-          totalSubjects = subjectsData.length
-        } else {
-          console.warn('Subjects query failed:', subjectsError)
-          totalSubjects = 5 // Default estimate
-        }
+        const subjectsSnapshot = await getDocs(collection(db, 'subjects'))
+        totalSubjects = subjectsSnapshot.size || 5
       } catch (err) {
-        console.warn('Subjects table access failed:', err)
+        console.warn('Subjects collection access failed:', err)
         totalSubjects = 5
       }
 
-      // Try to fetch attendance records (use correct table name)
+      // Try to fetch attendance records from Firebase
       try {
-        const { data: attendanceData, error: attendanceError } = await supabase
-          .from('attendance_records')
-          .select('*, users(full_name)')
-          .limit(5)
-          .order('created_at', { ascending: false })
-
-        if (attendanceError && attendanceError.code === '42P01') {
-          // Table doesn't exist - show system message
-          console.warn('Attendance records table does not exist')
+        const attendanceQuery = query(
+          collection(db, 'attendance_records'),
+          orderBy('created_at', 'desc'),
+          limit(5)
+        )
+        const attendanceSnapshot = await getDocs(attendanceQuery)
+        
+        if (attendanceSnapshot.empty) {
           recentActivityData = [
-            { user: 'System', action: 'Attendance tracking not yet configured', time: 'Just now' }
+            { user: 'System', action: 'No attendance records yet', time: 'Just now' }
           ]
-          attendanceRate = 0
-        } else if (attendanceError) {
-          console.warn('Attendance records query failed:', attendanceError)
-          recentActivityData = [
-            { user: 'System', action: 'Unable to load attendance data', time: 'Just now' }
-          ]
-          attendanceRate = 0
-        } else if (attendanceData && attendanceData.length > 0) {
-          recentActivityData = attendanceData.map(record => ({
-            user: record.users?.full_name || 'Unknown User',
+          attendanceRate = 100
+        } else {
+          const attendanceData = attendanceSnapshot.docs.map(doc => ({
+            id: doc.id,
+            ...doc.data()
+          }))
+          
+          recentActivityData = attendanceData.map((record: any) => ({
+            user: record.user_name || 'Unknown User',
             action: `Marked ${record.status || 'present'} for ${record.subject || 'a subject'}`,
             time: formatTimeAgo(new Date(record.created_at))
           }))
 
           // Calculate attendance rate
-          const presentCount = attendanceData.filter(a => a.status === 'present').length
+          const presentCount = attendanceData.filter((a: any) => a.status === 'present').length
           attendanceRate = Math.round((presentCount / attendanceData.length) * 100)
-        } else {
-          // No data but query succeeded
-          recentActivityData = [
-            { user: 'System', action: 'No attendance records yet', time: 'Just now' }
-          ]
-          attendanceRate = 100 // Default when no data
         }
       } catch (err) {
-        console.warn('Attendance records table access failed:', err)
+        console.warn('Attendance records collection access failed:', err)
         recentActivityData = [
           { user: 'System', action: 'Attendance system offline', time: 'Just now' }
         ]

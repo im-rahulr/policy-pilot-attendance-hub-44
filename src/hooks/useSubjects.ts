@@ -1,8 +1,15 @@
 import { useState, useEffect } from 'react'
-import { supabase, Subject } from '@/lib/supabase'
+import { db, Subject } from '@/lib/firebase'
 import { useAuth } from '@/contexts/AuthContext'
 
-export interface SubjectWithTeacher extends Subject {
+export interface SubjectWithTeacher {
+  id: string
+  name: string
+  code: string
+  description?: string
+  teacher_id: string
+  created_at: string
+  updated_at: string
   teacher?: {
     id: string
     full_name: string

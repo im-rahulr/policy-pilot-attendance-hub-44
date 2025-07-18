@@ -10,7 +10,8 @@ import { Badge } from "@/components/ui/badge";
 import { User, Mail, Settings, LogOut, AlertCircle, Loader2, Calendar, BookOpen, Lock, Eye, EyeOff } from "lucide-react";
 import { useAuth } from "@/contexts/AuthContext";
 import { useAttendance } from "@/hooks/useAttendance";
-import { supabase } from "@/lib/supabase";
+import { db } from "@/lib/firebase";
+import { doc, updateDoc } from "firebase/firestore";
 import { useToast } from "@/hooks/use-toast";
 
 const Profile = () => {
@@ -68,13 +69,9 @@ const Profile = () => {
     setError(null);
     
     try {
-      const { error } = await supabase.auth.updateUser({
-        password: passwordData.newPassword
-      });
-
-      if (error) {
-        throw error;
-      }
+      // Firebase auth password update would require current password verification
+      // For now, show a message that password update is not available
+      throw new Error("Password update not implemented with Firebase Auth")
 
       setPasswordData({
         currentPassword: "",

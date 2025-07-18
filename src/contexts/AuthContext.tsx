@@ -1,11 +1,10 @@
 
 import React, { createContext, useContext, useEffect, useState } from 'react'
-import { User as SupabaseUser, Session } from '@supabase/supabase-js'
-import { supabase, User } from '@/lib/supabase'
+import { User as FirebaseUser, onAuthStateChanged } from 'firebase/auth'
+import { auth, createUser, signInUser, signOutUser, resetUserPassword, getUserProfile, User } from '@/lib/firebase'
 
 interface AuthContextType {
   user: User | null
-  session: Session | null
   loading: boolean
   signUp: (email: string, password: string, fullName: string, role?: 'student' | 'teacher') => Promise<{ error: any; success?: boolean }>
   signIn: (email: string, password: string) => Promise<{ error: any; success?: boolean }>
@@ -29,121 +28,66 @@ interface AuthProviderProps {
 
 export const AuthProvider: React.FC<AuthProviderProps> = ({ children }) => {
   const [user, setUser] = useState<User | null>(null)
-  const [session, setSession] = useState<Session | null>(null)
   const [loading, setLoading] = useState(true)
 
-  console.log('AuthProvider state:', { user: !!user, session: !!session, loading });
+  console.log('AuthProvider state:', { user: !!user, loading });
 
   useEffect(() => {
-    let isMounted = true;
-
-    const initializeAuth = async () => {
-      try {
-        console.log('Getting initial session...')
-        const { data: { session }, error } = await supabase.auth.getSession()
-        
-        if (!isMounted) return;
-
-        if (error) {
-          console.error('Session error:', error)
-          setLoading(false)
-          return
-        }
-
-        console.log('Session result:', !!session)
-        setSession(session)
-        
-        if (session?.user) {
-          // Special admin override for specific email
-          const userRole = session.user.email === 'rahul11222233@gmail.com' 
-            ? 'admin' 
-            : (session.user.user_metadata?.role || 'student');
-            
-          const userData: User = {
-            id: session.user.id,
-            email: session.user.email || '',
-            full_name: session.user.user_metadata?.full_name || session.user.email?.split('@')[0] || 'User',
-            role: userRole,
-            created_at: session.user.created_at || new Date().toISOString(),
-            updated_at: new Date().toISOString()
-          }
-          console.log('Setting user:', userData)
-          setUser(userData)
-        }
-        
-        setLoading(false)
-      } catch (error) {
-        console.error('Auth initialization error:', error)
-        if (isMounted) {
-          setLoading(false)
-        }
-      }
-    }
-
-    initializeAuth()
-
-    const {
-      data: { subscription },
-    } = supabase.auth.onAuthStateChange(async (event, session) => {
-      console.log('Auth state change:', event, !!session)
+    const unsubscribe = onAuthStateChanged(auth, async (firebaseUser) => {
+      console.log('Auth state change:', !!firebaseUser)
       
-      if (!isMounted) return;
-
-      setSession(session)
-      
-      if (session?.user) {
-        // Special admin override for specific email
-        const userRole = session.user.email === 'rahul11222233@gmail.com' 
-          ? 'admin' 
-          : (session.user.user_metadata?.role || 'student');
+      if (firebaseUser) {
+        try {
+          // Get user profile from Firestore
+          let userProfile = await getUserProfile(firebaseUser.uid);
           
-        const userData: User = {
-          id: session.user.id,
-          email: session.user.email || '',
-          full_name: session.user.user_metadata?.full_name || session.user.email?.split('@')[0] || 'User',
-          role: userRole,
-          created_at: session.user.created_at || new Date().toISOString(),
-          updated_at: new Date().toISOString()
+          // If no profile exists, create a basic one
+          if (!userProfile) {
+            // Special admin override for specific email
+            const userRole = firebaseUser.email === 'rahul11222233@gmail.com' ? 'admin' : 'student';
+            
+            userProfile = {
+              id: firebaseUser.uid,
+              email: firebaseUser.email || '',
+              full_name: firebaseUser.displayName || firebaseUser.email?.split('@')[0] || 'User',
+              role: userRole,
+              created_at: new Date().toISOString(),
+              updated_at: new Date().toISOString()
+            };
+          } else {
+            // Special admin override for specific email
+            if (firebaseUser.email === 'rahul11222233@gmail.com') {
+              userProfile.role = 'admin';
+            }
+          }
+          
+          console.log('Setting user:', userProfile)
+          setUser(userProfile)
+        } catch (error) {
+          console.error('Error getting user profile:', error)
+          setUser(null)
         }
-        setUser(userData)
       } else {
         setUser(null)
       }
       
       setLoading(false)
-    })
+    });
 
-    return () => {
-      isMounted = false;
-      subscription.unsubscribe()
-    }
+    return () => unsubscribe();
   }, [])
 
   const signUp = async (email: string, password: string, fullName: string, role: 'student' | 'teacher' = 'student') => {
     try {
       console.log('Sign up attempt:', { email, fullName, role })
       
-      const { data, error } = await supabase.auth.signUp({
-        email,
-        password,
-        options: {
-          data: {
-            full_name: fullName,
-            role: role
-          }
-        }
-      })
+      await createUser(email, password, fullName, role)
       
-      console.log('Sign up result:', { data: !!data, error: error?.message })
-      
-      if (error) {
-        return { error, success: false }
-      }
-
+      console.log('Sign up successful')
       return { error: null, success: true }
-    } catch (error) {
+    } catch (error: any) {
       console.error('Sign up error:', error)
-      return { error, success: false }
+      return { error: { message: error.message }, success: false }
     }
   }
 
@@ -151,30 +95,21 @@ export const AuthProvider: React.FC<AuthProviderProps> = ({ children }) => {
     try {
       console.log('Sign in attempt:', email)
       
-      const { data, error } = await supabase.auth.signInWithPassword({
-        email,
-        password
-      })
+      await signInUser(email, password)
       
-      console.log('Sign in result:', { data: !!data, error: error?.message })
-      
-      if (error) {
-        return { error, success: false }
-      }
-
+      console.log('Sign in successful')
       return { error: null, success: true }
-    } catch (error) {
+    } catch (error: any) {
       console.error('Sign in error:', error)
-      return { error, success: false }
+      return { error: { message: error.message }, success: false }
     }
   }
 
   const signOut = async () => {
     try {
       console.log('Signing out')
-      await supabase.auth.signOut()
+      await signOutUser()
       setUser(null)
-      setSession(null)
     } catch (error) {
       console.error('Sign out error:', error)
     }
@@ -183,8 +118,8 @@ export const AuthProvider: React.FC<AuthProviderProps> = ({ children }) => {
   const resetPassword = async (email: string) => {
     try {
       console.log('Reset password for:', email)
-      const { error } = await supabase.auth.resetPasswordForEmail(email)
-      return { error }
+      await resetUserPassword(email)
+      return { error: null }
     } catch (error) {
       console.error('Reset password error:', error)
       return { error }
@@ -193,7 +128,6 @@ export const AuthProvider: React.FC<AuthProviderProps> = ({ children }) => {
 
   const value = {
     user,
-    session,
     loading,
     signUp,
     signIn,

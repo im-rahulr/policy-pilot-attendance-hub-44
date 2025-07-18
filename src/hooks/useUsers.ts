@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react'
-import { supabase, User } from '@/lib/supabase'
+import { db, User } from '@/lib/firebase'
 import { useAuth } from '@/contexts/AuthContext'
+import { collection, getDocs, updateDoc, deleteDoc, doc, orderBy, query } from 'firebase/firestore'
 
 export const useUsers = () => {
   const { user } = useAuth()
@@ -19,70 +20,28 @@ export const useUsers = () => {
       setLoading(true)
       setError(null)
 
-      // Use auth.admin to bypass RLS or query auth.users directly
+      // Fetch users from Firebase
       let usersData = []
       
       try {
-        // First try to query the users table (custom table)
-        const { data, error } = await supabase
-          .from('users')
-          .select('*')
-          .order('created_at', { ascending: false })
+        const usersQuery = query(collection(db, 'users'), orderBy('created_at', 'desc'))
+        const usersSnapshot = await getDocs(usersQuery)
+        
+        usersData = usersSnapshot.docs.map(doc => ({
+          id: doc.id,
+          ...doc.data()
+        } as User))
 
-        if (error && error.code === '42P17') {
-          // RLS infinite recursion - fall back to auth metadata approach
-          console.warn('RLS issue detected, using auth metadata approach')
-          
-          // Get current user and create a user list from auth
-          const { data: { user: authUser } } = await supabase.auth.getUser()
-          
-          if (authUser) {
-            usersData = [{
-              id: authUser.id,
-              email: authUser.email || '',
-              full_name: authUser.user_metadata?.full_name || authUser.email?.split('@')[0] || 'User',
-              role: authUser.user_metadata?.role || 'student',
-              avatar_url: authUser.user_metadata?.avatar_url || null,
-              created_at: authUser.created_at || new Date().toISOString(),
-              updated_at: authUser.updated_at || new Date().toISOString()
-            }]
-          }
-        } else if (error) {
-          throw error
-        } else {
-          usersData = data || []
-          
-          // If no users in custom table, fall back to current auth user
-          if (usersData.length === 0) {
-            const { data: { user: authUser } } = await supabase.auth.getUser()
-            if (authUser) {
-              usersData = [{
-                id: authUser.id,
-                email: authUser.email || '',
-                full_name: authUser.user_metadata?.full_name || authUser.email?.split('@')[0] || 'User',
-                role: authUser.user_metadata?.role || 'student',
-                avatar_url: authUser.user_metadata?.avatar_url || null,
-                created_at: authUser.created_at || new Date().toISOString(),
-                updated_at: authUser.updated_at || new Date().toISOString()
-              }]
-            }
-          }
+        // If no users found, include current user
+        if (usersData.length === 0 && user) {
+          usersData = [user]
         }
       } catch (dbError) {
-        console.warn('Database connection failed, using auth fallback:', dbError)
+        console.warn('Database connection failed, using current user:', dbError)
         
-        // Fallback to auth user
-        const { data: { user: authUser } } = await supabase.auth.getUser()
-        if (authUser) {
-          usersData = [{
-            id: authUser.id,
-            email: authUser.email || '',
-            full_name: authUser.user_metadata?.full_name || authUser.email?.split('@')[0] || 'User',
-            role: authUser.user_metadata?.role || 'student',
-            avatar_url: authUser.user_metadata?.avatar_url || null,
-            created_at: authUser.created_at || new Date().toISOString(),
-            updated_at: authUser.updated_at || new Date().toISOString()
-          }]
+        // Fallback to current user
+        if (user) {
+          usersData = [user]
         }
       }
 
@@ -97,14 +56,11 @@ export const useUsers = () => {
 
   const updateUserRole = async (userId: string, newRole: 'student' | 'teacher' | 'admin') => {
     try {
-      const { error } = await supabase
-        .from('users')
-        .update({ role: newRole, updated_at: new Date().toISOString() })
-        .eq('id', userId)
-
-      if (error) {
-        throw error
-      }
+      const userRef = doc(db, 'users', userId)
+      await updateDoc(userRef, { 
+        role: newRole, 
+        updated_at: new Date().toISOString() 
+      })
 
       // Update local state
       setUsers(prev => prev.map(user => 
@@ -122,14 +78,8 @@ export const useUsers = () => {
 
   const deleteUser = async (userId: string) => {
     try {
-      const { error } = await supabase
-        .from('users')
-        .delete()
-        .eq('id', userId)
-
-      if (error) {
-        throw error
-      }
+      const userRef = doc(db, 'users', userId)
+      await deleteDoc(userRef)
 
       // Update local state
       setUsers(prev => prev.filter(user => user.id !== userId))
